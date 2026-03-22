@@ -15,8 +15,16 @@ from fastapi import Request
 from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# On some cloud runtimes, the app directory can be read-only.
+# Allow overriding data path and fall back to /tmp to avoid startup crashes.
+DATA_DIR = Path(os.environ.get("DATA_DIR", str(BASE_DIR / "data")))
+try:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+except PermissionError:
+    DATA_DIR = Path("/tmp/reading-manager-data")
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 DB_PATH = DATA_DIR / "readings.db"
 
 READINGS_ROOT = Path(os.environ.get("READINGS_ROOT", "/Users/ronin/Documents/READ"))
