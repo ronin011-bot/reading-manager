@@ -1,0 +1,179 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Reading Manager</title>
+    <style>
+      body { font-family: -apple-system, system-ui, sans-serif; margin: 20px; }
+      .row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+      input,select,button,textarea { padding:6px; }
+      table { width:100%; border-collapse: collapse; font-size: 14px; }
+      td,th { border-bottom:1px solid #ddd; padding:6px; vertical-align: top; }
+      .muted { color:#666; font-size:12px; }
+      .small { font-size:12px; }
+    </style>
+  </head>
+  <body>
+    <h2>Reading Manager</h2>
+    <div class="muted">Root: {{ readings_root }}</div>
+
+    <div class="row">
+      <input id="q" placeholder="Search filename/path" style="min-width:260px" />
+      <select id="topic"><option value="">All topics</option></select>
+      <select id="status">
+        <option value="">All status</option>
+        <option value="to_read">to_read</option>
+        <option value="in_progress">in_progress</option>
+        <option value="done">done</option>
+      </select>
+      <select id="age">
+        <option value="">All age</option>
+        <option value="fresh">fresh</option>
+        <option value="recent">recent</option>
+        <option value="aging">aging</option>
+        <option value="archive">archive</option>
+      </select>
+      <select id="sort">
+        <option value="mtime_desc">Newest first</option>
+        <option value="mtime_asc">Oldest first</option>
+        <option value="priority_desc">Priority high → low</option>
+        <option value="priority_asc">Priority low → high</option>
+        <option value="filename_asc">Filename A → Z</option>
+        <option value="filename_desc">Filename Z → A</option>
+      </select>
+      <button onclick="applyFilters()">Filter</button>
+      <button onclick="rescan()">Rescan</button>
+    </div>
+
+    <div id="statusline" class="muted"></div>
+    <div id="stats" class="muted" style="margin:8px 0 14px 0"></div>
+    <table>
+      <thead>
+        <tr>
+          <th>Doc</th><th>Topic</th><th>Age</th><th>Status</th><th>Priority</th><th>Tags</th><th>Notes</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="row" style="margin-top:10px; align-items:center">
+      <button id="prevBtn" onclick="prevPage()">← Prev</button>
+      <button id="nextBtn" onclick="nextPage()">Next →</button>
+      <span id="pageInfo" class="muted"></span>
+    </div>
+
+    <script>
+      let docs = [];
+      const state = { offset: 0, limit: 50, total: 0 };
+
+      async function api(url, opts={}) {
+        const r = await fetch(url, {headers:{'Content-Type':'application/json'}, ...opts});
+        if (!r.ok) throw new Error(await r.text());
+        return r.json();
+      }
+
+      async function loadStats() {
+        const s = await api('/api/stats');
+        const top = (s.top_topics || []).slice(0, 5).map(t => `${t.topic} (${t.count})`).join(', ');
+        document.getElementById('stats').textContent =
+          `Total: ${s.total} · to_read: ${s.by_status.to_read} · in_progress: ${s.by_status.in_progress} · done: ${s.by_status.done}` +
+          (top ? ` · top topics: ${top}` : '');
+      }
+
+      async function loadDocs() {
+        const q = document.getElementById('q').value;
+        const topic = document.getElementById('topic').value;
+        const status = document.getElementById('status').value;
+        const age = document.getElementById('age').value;
+        const sort = document.getElementById('sort').value;
+        const params = new URLSearchParams({q, topic, status, age, sort, limit: String(state.limit), offset: String(state.offset)});
+        const data = await api('/api/docs?' + params.toString());
+        docs = data.items;
+        state.total = data.total;
+
+        const topicEl = document.getElementById('topic');
+        const current = topicEl.value;
+        topicEl.innerHTML = '<option value="">All topics</option>' + data.topics.map(t => `<option ${t===current?'selected':''}>${t}</option>`).join('');
+
+        const rows = document.getElementById('rows');
+        rows.innerHTML = docs.map(d => `
+          <tr>
+            <td>
+              <div><strong>${escapeHtml(d.filename)}</strong></div>
+              <div class="muted small">${escapeHtml(d.path)}</div>
+            </td>
+            <td>${escapeHtml(d.topic || '')}</td>
+            <td>${d.age_bucket}</td>
+            <td>
+              <select id="status-${d.id}">
+                <option value="to_read" ${d.status==='to_read'?'selected':''}>to_read</option>
+                <option value="in_progress" ${d.status==='in_progress'?'selected':''}>in_progress</option>
+                <option value="done" ${d.status==='done'?'selected':''}>done</option>
+              </select>
+            </td>
+            <td><input id="priority-${d.id}" type="number" min="1" max="5" value="${d.priority}" style="width:56px"/></td>
+            <td><input id="tags-${d.id}" value="${escapeHtml(d.tags || '')}" /></td>
+            <td><textarea id="notes-${d.id}" rows="2" cols="26">${escapeHtml(d.notes || '')}</textarea></td>
+            <td style="display:flex; gap:6px; flex-wrap:wrap">
+              <button onclick="saveDoc(${d.id})">Save</button>
+              <button onclick="openDoc(${d.id})">Open</button>
+            </td>
+          </tr>
+        `).join('');
+
+        const start = state.total === 0 ? 0 : state.offset + 1;
+        const end = state.offset + docs.length;
+        document.getElementById('pageInfo').textContent = `Showing ${start}-${end} of ${state.total}`;
+        document.getElementById('prevBtn').disabled = state.offset === 0;
+        document.getElementById('nextBtn').disabled = (state.offset + docs.length) >= state.total;
+
+        document.getElementById('statusline').textContent = `Loaded ${docs.length} docs`;
+        await loadStats();
+      }
+
+      function applyFilters() {
+        state.offset = 0;
+        loadDocs();
+      }
+
+      function nextPage() {
+        state.offset += state.limit;
+        loadDocs();
+      }
+
+      function prevPage() {
+        state.offset = Math.max(0, state.offset - state.limit);
+        loadDocs();
+      }
+
+      async function saveDoc(id) {
+        const payload = {
+          status: document.getElementById(`status-${id}`).value,
+          priority: Number(document.getElementById(`priority-${id}`).value || 3),
+          tags: document.getElementById(`tags-${id}`).value,
+          notes: document.getElementById(`notes-${id}`).value,
+        };
+        await api('/api/docs/' + id + '/meta', { method:'POST', body: JSON.stringify(payload) });
+        document.getElementById('statusline').textContent = `Saved doc #${id}`;
+      }
+
+      async function openDoc(id) {
+        await api('/api/docs/' + id + '/open', { method:'POST', body:'{}' });
+        document.getElementById('statusline').textContent = `Opened doc #${id}`;
+      }
+
+      async function rescan() {
+        const res = await api('/api/rescan', { method:'POST', body:'{}' });
+        document.getElementById('statusline').textContent = `Rescan complete. Indexed ${res.indexed}, removed ${res.removed}`;
+        state.offset = 0;
+        await loadDocs();
+      }
+
+      function escapeHtml(s) {
+        return (s || '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
+      }
+
+      loadDocs();
+    </script>
+  </body>
+</html>
