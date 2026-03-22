@@ -23,7 +23,11 @@ READINGS_ROOT = Path(os.environ.get("READINGS_ROOT", "/Users/ronin/Documents/REA
 ALLOWED_EXT = {".pdf", ".epub", ".doc", ".docx", ".md", ".txt", ".html"}
 
 app = FastAPI(title="Reading Manager")
-app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+STATIC_DIR = BASE_DIR / "static"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
